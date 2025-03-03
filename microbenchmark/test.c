@@ -12,7 +12,6 @@
 #include <stdint.h>
 #include <math.h>
 #include <sys/time.h>
-#include <getopt.h>
 
 // 配置参数
 size_t MEMORY_SIZE = 1073741824;
@@ -28,8 +27,6 @@ size_t total_pages;
 void *memory;
 char *page_ops;
 _Atomic int stop_flag = 0;
-
-FILE *output_file = NULL;
 
 typedef struct {
     pthread_t thread;
@@ -63,96 +60,35 @@ void format_timestamp(char *buffer, size_t buffer_size) {
     snprintf(buffer + len, buffer_size - len, ".%03ld", tv.tv_usec / 1000);
 }
 
-void parse_arguments(int argc, char *argv[]) {
-    int opt;
-    while ((opt = getopt(argc, argv, "o:")) != -1) {
-        switch (opt) {
-            case 'o':
-                output_file = fopen(optarg, "w");
-                if (!output_file) {
-                    perror("Failed to open output file");
-                    exit(EXIT_FAILURE);
-                }
-                break;
-            default:
-                fprintf(stderr, "Usage: %s [-o output_file]\n", argv[0]);
-                exit(EXIT_FAILURE);
-        }
-    }
-}
-
-// 修改后的输出函数
-void print_statistics(const char *timestamp_buf, 
-    uint64_t total_read, uint64_t total_write,
-    uint64_t interval_read, uint64_t interval_write) {
-    char buffer[256];
-    snprintf(buffer, sizeof(buffer),
-        "[%s] Interval: %lu (R:%lu W:%lu)\n",
-        timestamp_buf,
-        interval_read + interval_write,
-        interval_read,
-        interval_write
-    );
-
-    // 输出到文件或标准输出
-    if (output_file) {
-        fprintf(output_file, "%s", buffer);
-        fflush(output_file);  // 确保内容立即写入文件
-    } else {
-        printf("%s", buffer);
-    }
-}
-
-int main(int argc, char *argv[]) {
+int main() {
     signal(SIGINT, handle_signal);
-
-    // 解析命令行参数
-    parse_arguments(argc, argv);
-
-    // 解析配置文件
     parse_config("config.cfg");
 
-    // 初始化页面大小和总页面数
     page_size = sysconf(_SC_PAGESIZE);
     total_pages = MEMORY_SIZE / page_size;
     MEMORY_SIZE = total_pages * page_size;
 
-    // 分配对齐的内存区域
     if (posix_memalign(&memory, page_size, MEMORY_SIZE) != 0) {
         perror("posix_memalign");
         exit(EXIT_FAILURE);
     }
 
-    // 初始化内存区域为 0
     memset(memory, 0, MEMORY_SIZE);
 
-    // 如果启用固定模式，初始化页面操作类型
     if (FIXED_MODE) {
         init_page_ops();
     }
 
-    // 创建线程数据数组
     threads_data = calloc(THREADS, sizeof(ThreadData));
-    if (!threads_data) {
-        perror("calloc");
-        exit(EXIT_FAILURE);
-    }
-
-    // 创建线程
     for (int i = 0; i < THREADS; i++) {
         threads_data[i].seed = time(NULL) ^ i;
         threads_data[i].seq_pos = i * (total_pages / THREADS);
-        if (pthread_create(&threads_data[i].thread, NULL, thread_func, &threads_data[i]) != 0) {
-            perror("pthread_create");
-            exit(EXIT_FAILURE);
-        }
+        pthread_create(&threads_data[i].thread, NULL, thread_func, &threads_data[i]);
     }
 
-    // 初始化统计变量
     uint64_t last_total_read = 0, last_total_write = 0;
     char timestamp_buf[64];
 
-    // 主循环
     while (!stop_flag) {
         usleep(RECORD_INTERVAL * 1000);
 
@@ -170,31 +106,28 @@ int main(int argc, char *argv[]) {
         uint64_t interval_read = current_total_read - last_total_read;
         uint64_t interval_write = current_total_write - last_total_write;
 
-        // 输出统计信息
-        print_statistics(timestamp_buf,
-                        current_total_read, current_total_write,
-                        interval_read, interval_write);
+        // 输出带时间戳和增量信息
+        printf("[%s] Total: %lu (R:%lu W:%lu) | Interval: %lu (R:%lu W:%lu)\n",
+              timestamp_buf,
+              current_total_read + current_total_write,
+              current_total_read,
+              current_total_write,
+              interval_read + interval_write,
+              interval_read,
+              interval_write);
 
         // 保存当前值作为下次的上次值
         last_total_read = current_total_read;
         last_total_write = current_total_write;
     }
 
-    // 等待所有线程结束
     for (int i = 0; i < THREADS; i++) {
         pthread_join(threads_data[i].thread, NULL);
     }
 
-    // 释放资源
     free(memory);
     free(threads_data);
     if (FIXED_MODE) free(page_ops);
-
-    // 关闭输出文件
-    if (output_file) {
-        fclose(output_file);
-    }
-
     return 0;
 }
 
