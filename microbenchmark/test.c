@@ -1,0 +1,233 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <time.h>
+#include <math.h>
+#include <stdatomic.h>
+#include <signal.h>
+#include <stdint.h>
+#include <math.h>
+#include <sys/time.h>
+
+// 配置参数
+size_t MEMORY_SIZE = 1073741824;
+char ACCESS_DISTRIBUTION[20] = "uniform";
+int RW_RATIO = 70;
+int ACCESS_SLEEP_TIME = 0;
+int THREADS = 4;
+int FIXED_MODE = 1;
+int RECORD_INTERVAL = 1000;
+
+size_t page_size;
+size_t total_pages;
+void *memory;
+char *page_ops;
+_Atomic int stop_flag = 0;
+
+typedef struct {
+    pthread_t thread;
+    _Atomic uint64_t read_count;
+    _Atomic uint64_t write_count;
+    unsigned int seed;
+    size_t seq_pos;
+} ThreadData;
+
+ThreadData *threads_data;
+
+void parse_config(const char *filename);
+void init_page_ops();
+void* thread_func(void *arg);
+size_t get_page_index(ThreadData *data);
+size_t zipf_variate(unsigned int *seed);
+
+void handle_signal(int sig) {
+    stop_flag = 1;
+}
+
+void format_timestamp(char *buffer, size_t buffer_size) {
+    struct timeval tv;
+    struct tm tm_info;
+    
+    gettimeofday(&tv, NULL);
+    localtime_r(&tv.tv_sec, &tm_info);
+    
+    strftime(buffer, buffer_size, "%Y-%m-%d %H:%M:%S", &tm_info);
+    size_t len = strlen(buffer);
+    snprintf(buffer + len, buffer_size - len, ".%03ld", tv.tv_usec / 1000);
+}
+
+int main() {
+    signal(SIGINT, handle_signal);
+    parse_config("config.cfg");
+
+    page_size = sysconf(_SC_PAGESIZE);
+    total_pages = MEMORY_SIZE / page_size;
+    MEMORY_SIZE = total_pages * page_size;
+
+    if (posix_memalign(&memory, page_size, MEMORY_SIZE) != 0) {
+        perror("posix_memalign");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(memory, 0, MEMORY_SIZE);
+
+    if (FIXED_MODE) {
+        init_page_ops();
+    }
+
+    threads_data = calloc(THREADS, sizeof(ThreadData));
+    for (int i = 0; i < THREADS; i++) {
+        threads_data[i].seed = time(NULL) ^ i;
+        threads_data[i].seq_pos = i * (total_pages / THREADS);
+        pthread_create(&threads_data[i].thread, NULL, thread_func, &threads_data[i]);
+    }
+
+    uint64_t last_total_read = 0, last_total_write = 0;
+    char timestamp_buf[64];
+
+    while (!stop_flag) {
+        usleep(RECORD_INTERVAL * 1000);
+
+        // 获取时间戳
+        format_timestamp(timestamp_buf, sizeof(timestamp_buf));
+
+        // 计算总量
+        uint64_t current_total_read = 0, current_total_write = 0;
+        for (int i = 0; i < THREADS; i++) {
+            current_total_read += atomic_load(&threads_data[i].read_count);
+            current_total_write += atomic_load(&threads_data[i].write_count);
+        }
+
+        // 计算增量
+        uint64_t interval_read = current_total_read - last_total_read;
+        uint64_t interval_write = current_total_write - last_total_write;
+
+        // 输出带时间戳和增量信息
+        printf("[%s] Total: %lu (R:%lu W:%lu) | Interval: %lu (R:%lu W:%lu)\n",
+              timestamp_buf,
+              current_total_read + current_total_write,
+              current_total_read,
+              current_total_write,
+              interval_read + interval_write,
+              interval_read,
+              interval_write);
+
+        // 保存当前值作为下次的上次值
+        last_total_read = current_total_read;
+        last_total_write = current_total_write;
+    }
+
+    for (int i = 0; i < THREADS; i++) {
+        pthread_join(threads_data[i].thread, NULL);
+    }
+
+    free(memory);
+    free(threads_data);
+    if (FIXED_MODE) free(page_ops);
+    return 0;
+}
+
+void parse_config(const char *filename) {
+    FILE *fp = fopen(filename, "r");
+    char line[128];
+    while (fgets(line, sizeof(line), fp)) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+        
+        char key[50], value[50];
+        if (sscanf(line, "%[^=]=%s", key, value) == 2) {
+            if (strcmp(key, "MEMORY_SIZE") == 0) {
+                MEMORY_SIZE = strtoull(value, NULL, 10);
+            } else if (strcmp(key, "ACCESS_DISTRIBUTION") == 0) {
+                strncpy(ACCESS_DISTRIBUTION, value, sizeof(ACCESS_DISTRIBUTION));
+            } else if (strcmp(key, "RW_RATIO") == 0) {
+                RW_RATIO = atoi(value);
+            } else if (strcmp(key, "ACCESS_SLEEP_TIME") == 0) {
+                ACCESS_SLEEP_TIME = atoi(value);
+            } else if (strcmp(key, "THREADS") == 0) {
+                THREADS = atoi(value);
+            } else if (strcmp(key, "FIXED_MODE") == 0) {
+                FIXED_MODE = atoi(value);
+            } else if (strcmp(key, "RECORE_TIMEINTERVAL") == 0) {
+                RECORD_INTERVAL = atoi(value);
+            }
+        }
+    }
+    fclose(fp);
+}
+
+void init_page_ops() {
+    page_ops = malloc(total_pages);
+    size_t read_pages = (total_pages * RW_RATIO) / 100;
+    
+    for (size_t i = 0; i < total_pages; i++) {
+        page_ops[i] = (i < read_pages) ? 'R' : 'W';
+    }
+
+    for (size_t i = total_pages - 1; i > 0; i--) {
+        size_t j = rand() % (i + 1);
+        char tmp = page_ops[i];
+        page_ops[i] = page_ops[j];
+        page_ops[j] = tmp;
+    }
+}
+
+void* thread_func(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    while (!stop_flag) {
+        size_t page_idx = get_page_index(data);
+        volatile char *addr = (volatile char *)memory + page_idx * page_size;
+
+        if (FIXED_MODE) {
+            if (page_ops[page_idx] == 'R') {
+                (void)*addr;
+                atomic_fetch_add(&data->read_count, 1);
+            } else {
+                *addr = (char)rand_r(&data->seed);
+                atomic_fetch_add(&data->write_count, 1);
+            }
+        } else {
+            if (rand_r(&data->seed) % 100 < RW_RATIO) {
+                (void)*addr;
+                atomic_fetch_add(&data->read_count, 1);
+            } else {
+                *addr = (char)rand_r(&data->seed);
+                atomic_fetch_add(&data->write_count, 1);
+            }
+        }
+
+        if (ACCESS_SLEEP_TIME > 0) {
+            usleep(ACCESS_SLEEP_TIME * 1000);
+        }
+    }
+    return NULL;
+}
+
+size_t get_page_index(ThreadData *data) {
+    if (strcmp(ACCESS_DISTRIBUTION, "uniform") == 0) {
+        return rand_r(&data->seed) % total_pages;
+    } else if (strcmp(ACCESS_DISTRIBUTION, "sequential") == 0) {
+        size_t idx = data->seq_pos;
+        data->seq_pos = (data->seq_pos + 1) % total_pages;
+        return idx;
+    } else if (strcmp(ACCESS_DISTRIBUTION, "zipf") == 0) {
+        return zipf_variate(&data->seed);
+    }
+    return 0;
+}
+
+size_t zipf_variate(unsigned int *seed) {
+    double alpha = 1.0;
+    double zetan = 1.0;
+    double eta = (1.0 - pow(2.0 / total_pages, 1.0 - alpha)) / 
+                (1.0 - zetan / (1.0 - alpha));
+    
+    double u = (double)rand_r(seed) / RAND_MAX;
+    double uz = u * zetan;
+    if (uz < 1.0) return 0;
+    if (uz < 1.0 + pow(0.5, alpha)) return 1;
+    return (size_t)(total_pages * pow(eta * u - eta + 1.0, 1.0 / alpha));
+}
