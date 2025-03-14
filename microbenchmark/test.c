@@ -22,6 +22,7 @@ int ACCESS_SLEEP_TIME = 0;
 int THREADS = 4;
 int FIXED_MODE = 1;
 int RECORD_INTERVAL = 1000;
+int PROCESS_NUM=1;
 
 size_t page_size;
 size_t total_pages;
@@ -111,6 +112,10 @@ int main(int argc, char *argv[]) {
 
     // 解析配置文件
     parse_config("config.cfg");
+
+    // 创建PROCESS_NUM个进程
+    for(int i=1;i<PROCESS_NUM;i++)
+        fork();
 
     // 初始化页面大小和总页面数
     page_size = sysconf(_SC_PAGESIZE);
@@ -220,6 +225,8 @@ void parse_config(const char *filename) {
                 FIXED_MODE = atoi(value);
             } else if (strcmp(key, "RECORE_TIMEINTERVAL") == 0) {
                 RECORD_INTERVAL = atoi(value);
+            } else if (strcmp(key, "PROCESS_NUM") == 0) {
+                PROCESS_NUM = atoi(value);
             }
         }
     }
