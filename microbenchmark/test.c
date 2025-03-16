@@ -22,6 +22,7 @@ int ACCESS_SLEEP_TIME = 0;
 int THREADS = 4;
 int FIXED_MODE = 1;
 int RECORD_INTERVAL = 1000;
+int RECORD_SLEEP_INTERVAL = 1000;
 int PROCESS_NUM=1;
 
 size_t page_size;
@@ -31,6 +32,8 @@ char *page_ops;
 _Atomic int stop_flag = 0;
 
 FILE *output_file = NULL;
+
+_Atomic int stop = 0;
 
 typedef struct {
     pthread_t thread;
@@ -50,6 +53,14 @@ size_t zipf_variate(unsigned int *seed);
 
 void handle_signal(int sig) {
     stop_flag = 1;
+}
+
+void suspend(int sig){
+    stop = 1;
+}
+
+void run(int sig){
+    stop = 0;
 }
 
 void format_timestamp(char *buffer, size_t buffer_size) {
@@ -160,6 +171,9 @@ int main(int argc, char *argv[]) {
     // 主循环
     while (!stop_flag) {
         usleep(RECORD_INTERVAL * 1000);
+        atomic_store(&stop, 1);
+        usleep(RECORD_SLEEP_INTERVAL * 1000);
+        atomic_store(&stop, 0);
 
         // 获取时间戳
         format_timestamp(timestamp_buf, sizeof(timestamp_buf));
@@ -225,6 +239,8 @@ void parse_config(const char *filename) {
                 FIXED_MODE = atoi(value);
             } else if (strcmp(key, "RECORE_TIMEINTERVAL") == 0) {
                 RECORD_INTERVAL = atoi(value);
+            } else if (strcmp(key, "RECORE_SLEEP_TIMEINTERVAL") == 0){
+                RECORD_SLEEP_INTERVAL = atoi(value);
             } else if (strcmp(key, "PROCESS_NUM") == 0) {
                 PROCESS_NUM = atoi(value);
             }
@@ -274,8 +290,10 @@ void* thread_func(void *arg) {
         }
 
         if (ACCESS_SLEEP_TIME > 0) {
-            usleep(ACCESS_SLEEP_TIME * 1000);
+            usleep(ACCESS_SLEEP_TIME);
         }
+        if (atomic_load(&stop))
+            while (atomic_load(&stop)) usleep(1000);
     }
     return NULL;
 }
@@ -293,15 +311,25 @@ size_t get_page_index(ThreadData *data) {
     return 0;
 }
 
+// 这个计算的开销也有点太大了，导致每10ms最多才能访问744次内存
+size_t zipf_variate_fast(unsigned int *seed, size_t total_pages, double alpha) {
+    // 生成均匀分布的随机数 u ∈ (0,1)
+    double u = (double)rand_r(seed) / (double)RAND_MAX;
+
+    // 处理 alpha=1 的特殊情况（需单独优化）
+    if (alpha == 1.0) alpha = 1.000001;
+
+    // 近似公式：通过逆变换法直接计算 Key
+    double numerator = pow(total_pages, 1.0 - alpha) - 1.0;
+    double k = pow(u * numerator + 1.0, 1.0 / (1.0 - alpha)) - 1.0;
+
+    // 四舍五入并限制范围
+    size_t result = (size_t)(k + 0.5);
+    if (result >= total_pages) result = total_pages - 1;
+
+    return result;
+}
+
 size_t zipf_variate(unsigned int *seed) {
-    double alpha = 1.0;
-    double zetan = 1.0;
-    double eta = (1.0 - pow(2.0 / total_pages, 1.0 - alpha)) / 
-                (1.0 - zetan / (1.0 - alpha));
-    
-    double u = (double)rand_r(seed) / RAND_MAX;
-    double uz = u * zetan;
-    if (uz < 1.0) return 0;
-    if (uz < 1.0 + pow(0.5, alpha)) return 1;
-    return (size_t)(total_pages * pow(eta * u - eta + 1.0, 1.0 / alpha));
+    return zipf_variate_fast(seed, total_pages, 0.99);
 }
