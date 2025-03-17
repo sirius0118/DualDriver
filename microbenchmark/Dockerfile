@@ -9,4 +9,4 @@ COPY test /app/test
 COPY config.cfg /app/config.cfg
 
 # 设置容器启动时运行的命令
-CMD ./test -o /app/result.log
+CMD ["./test", "-o", "/app/result.log"]

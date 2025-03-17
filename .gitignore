@@ -1,3 +1,6 @@
 *.log
 .vscode
 .vscode/*
+**/venv/
+./Key_log
+realbenchmark/AI/opt1.3b

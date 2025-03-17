@@ -1,0 +1,15 @@
+name: my_ebnto_model
+version: "1.0.0"
+service: 'service:LLMServer'
+labels:
+  owner: cggwz
+  stage: demo
+include:
+  - '*.py'
+  - 'opt1.3b/'
+python:
+  requirements_txt: './requirements.txt'
+  lock_packages: false
+docker:
+  python_version: "3.11"
+
