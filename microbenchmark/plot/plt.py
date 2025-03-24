@@ -11,7 +11,7 @@ def read_log_file(file_path):
     with open(file_path, 'r') as file:
         return file.readlines()
 
-log_file = read_log_file('./post_result.log')
+log_file = read_log_file('./result.log')
 
 time = []
 data = []
@@ -21,14 +21,14 @@ i = 0
 value1, value2 = 0, 0
 now = 0
 for line in log_file:
-    
-    i = i % 2
-    if i == 0:
-        sub_str = line[len('[2025-03-16 02:40:59.624] Interval: '): len('[2025-03-16 02:40:59.594] Interval: 616')]
+    # i = i % 2
+    if i == -1:
+        sub_str = line[len('[2025-03-18 08:43:13.077] Interval: '): len('[2025-03-18 08:43:13.077] Interval: 608')]
         if sub_str[-1] == '(':
             sub_str = sub_str[:-1]
         value1 = 0
         value1 += int(sub_str)
+        # print(value1)
     else:
         sub_str = line[len('[2025-03-16 02:40:59.624] Interval: '): len('[2025-03-16 02:40:59.594] Interval: 616')]
         if sub_str[-1] == '(':
@@ -39,7 +39,7 @@ for line in log_file:
         m = int(time_str[3:5])
         s = int(time_str[6:8])
         ms = int(time_str[9:12])
-        now = h * 60 * 60 * 1000 + m * 60 * 1000 + s * 1000 + ms;
+        now = h * 60 * 60 * 1000 + m * 60 * 1000 + s * 1000 + ms
         if len(time) == 0 or now - time[len(time) - 1] < interval * 2:
             time.append(now)
             data.append((value1 + value2) / 2)
@@ -57,9 +57,9 @@ for line in log_file:
 time_100 = []
 data_100 = []
 
-for i in range(int(len(time) / 100) + 1):
-    time_100.append(time[i * 100])
-    data_100.append(np.array(data[i * 100 : min(len(data), (i + 1) * 100)]).mean())
+# for i in range(int(len(time) / 100) + 1):
+#     time_100.append(time[i * 100])
+#     data_100.append(np.array(data[i * 100 : min(len(data), (i + 1) * 100)]).mean())
 
 # time = time_100
 # data = data_100
@@ -67,11 +67,11 @@ for i in range(int(len(time) / 100) + 1):
 plt.figure(figsize=(16, 5))
 time = np.array(time)
 time = time/1000 - time[0] / 1000
-plt.plot(time, data, color='black')
+plt.plot(time, data2, color='black')
 # plt.plot(time, data1)
 # plt.plot(time, data2)
-plt.xticks(range(18,25))
-plt.xlim([18, 24])
+plt.xticks(range(99,110))
+plt.xlim([99, 109])
 plt.ylabel("Memory access (times)", fontsize=15)
 plt.xlabel("Time (seconds)", fontsize=15)
 # plt.xticks(time, time/1000 - time[0])

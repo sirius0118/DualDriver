@@ -1,6 +1,14 @@
-*.log
+*.log*
 .vscode
 .vscode/*
 **/venv/
 ./Key_log
 realbenchmark/AI/opt1.3b
+*.png
+*.txt
+realbenchmark/Graph500/gapbs/.git
+realbenchmark/TestAlpha/MemoryIndex/bplus-tree/.git
+realbenchmark/TestAlpha/MemoryIndex/bplustree/.git
+realbenchmark/gpt2/gpt-2/.git
+realbenchmark/mysql/benchbase/.git
+workload/YCSB-C/.git

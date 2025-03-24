@@ -34,7 +34,13 @@ _Atomic int stop_flag = 0;
 FILE *output_file = NULL;
 
 _Atomic int stop = 0;
-
+#ifdef DEBUG
+int all_time  = 0;
+#define MAX_RECORED 1000000
+unsigned long addr_record[MAX_RECORED];
+// char op_record[MAX_RECORED];
+pthread_mutex_t  mutex;
+#endif
 typedef struct {
     pthread_t thread;
     _Atomic uint64_t read_count;
@@ -116,6 +122,10 @@ void print_statistics(const char *timestamp_buf,
 }
 
 int main(int argc, char *argv[]) {
+#ifdef DEBUG
+    int printed = 0;
+    pthread_mutex_init(&mutex, NULL);
+#endif
     signal(SIGINT, handle_signal);
 
     // 解析命令行参数
@@ -175,6 +185,20 @@ int main(int argc, char *argv[]) {
         usleep(RECORD_SLEEP_INTERVAL * 1000);
         atomic_store(&stop, 0);
 
+        #ifdef DEBUG
+        if(all_time > MAX_RECORED && printed == 0){
+            FILE *fp;
+            int op_ind=0;
+            printed = 1;
+            fp = fopen("addr_record.txt", "w");
+            for(int i=0;i<all_time;i++){
+                op_ind=(addr_record[i]-(unsigned long)memory)/page_size;
+                fprintf(fp, "%lx  %c\n", addr_record[i],page_ops[op_ind]);
+            }
+            fclose(fp);
+        }
+        #endif
+
         // 获取时间戳
         format_timestamp(timestamp_buf, sizeof(timestamp_buf));
 
@@ -203,7 +227,10 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < THREADS; i++) {
         pthread_join(threads_data[i].thread, NULL);
     }
+#ifdef DEBUG
 
+    pthread_mutex_destroy(&mutex);
+#endif
     // 释放资源
     free(memory);
     free(threads_data);
@@ -270,7 +297,13 @@ void* thread_func(void *arg) {
     while (!stop_flag) {
         size_t page_idx = get_page_index(data);
         volatile char *addr = (volatile char *)memory + page_idx * page_size;
-
+#ifdef DEBUG
+        pthread_mutex_lock(&mutex);
+        if(all_time <= MAX_RECORED){
+            addr_record[all_time++] = (unsigned long)addr;
+        }
+        pthread_mutex_unlock(&mutex);
+#endif
         if (FIXED_MODE) {
             if (page_ops[page_idx] == 'R') {
                 (void)*addr;
@@ -331,5 +364,5 @@ size_t zipf_variate_fast(unsigned int *seed, size_t total_pages, double alpha) {
 }
 
 size_t zipf_variate(unsigned int *seed) {
-    return zipf_variate_fast(seed, total_pages, 0.99);
+    return zipf_variate_fast(seed, total_pages, 1);
 }
